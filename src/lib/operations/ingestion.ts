@@ -1,21 +1,18 @@
 import * as XLSX from "xlsx";
-import { canonicalFieldHints, detectPlatformAdapter } from "./adapters";
+import { runAdapterRegistry } from "./adapters";
+import { excelSerialToDate } from "./extractLineItems";
+import type { AppField, MappingRegistry } from "./adapters";
 import type {
-  CanonicalField,
   CustomerProfile,
   IngestionEvent,
   IngestionResult,
   LineItem,
-  MappingAudit,
-  MappingMode,
   MenuItem,
   OperatorSettings,
-  PlatformAdapter,
   RawSheet,
 } from "./types";
 
 const headerTokens = ["date", "customer", "item", "revenue", "payout", "fee", "quantity"];
-const requiredFields: CanonicalField[] = ["orderDate", "customerName", "menuItem", "quantitySold", "grossRevenue"];
 const makeId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -32,39 +29,8 @@ const log = (logs: IngestionEvent[], level: IngestionEvent["level"], message: st
 
 const clean = (value: unknown) => String(value ?? "").trim();
 const normalizeKey = (value: string) => value.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-const toNumber = (value: unknown) => {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  const normalized = clean(value).replace(/[$,%(),]/g, (match) => (match === "(" || match === ")" ? "-" : ""));
-  const parsed = Number.parseFloat(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
 
-export const excelSerialToDate = (serial: number): Date =>
-  new Date(Math.round((serial - 25569) * 86400 * 1000));
-
-const parseDate = (value: unknown, adapter: PlatformAdapter, logs: IngestionEvent[]) => {
-  // SheetJS with cellDates:true returns pre-parsed Date objects for .xlsm files
-  if (value instanceof Date) return value;
-  if (typeof value === "number") {
-    // JS timestamps (ms since epoch) are > 1e11; Excel serials are < 1e6
-    if (value > 1e11) {
-      const converted = new Date(value);
-      log(logs, "info", `Date JS-timestamp converted: ${value} -> ${converted.toISOString().slice(0, 10)}`);
-      return converted;
-    }
-    const converted = excelSerialToDate(value);
-    log(logs, "info", `Date serial converted: ${value} -> ${converted.toISOString().slice(0, 10)}`);
-    return converted;
-  }
-  const raw = clean(value);
-  if (!raw) return null;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) {
-    log(logs, "warn", `Unable to parse date value "${raw}" with adapter ${adapter.id}`);
-    return null;
-  }
-  return parsed;
-};
+export { excelSerialToDate };
 
 const findHeaderRow = (rows: unknown[][], logs: IngestionEvent[]) => {
   const scanLimit = Math.min(rows.length, 20);
@@ -94,91 +60,6 @@ const classifySheet = (name: string, rows: unknown[][], headerRowIndex: number):
   const type = score >= 5 ? "operational_data" : "unknown";
   console.info("Sheet classification", { sheet: name, score, type });
   return { name, rows, headerRowIndex, headers, classificationScore: score, type };
-};
-
-const levenshtein = (a: string, b: string) => {
-  const dp = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
-  for (let i = 0; i <= a.length; i += 1) dp[i][0] = i;
-  for (let j = 0; j <= b.length; j += 1) dp[0][j] = j;
-  for (let i = 1; i <= a.length; i += 1) {
-    for (let j = 1; j <= b.length; j += 1) {
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-      );
-    }
-  }
-  return dp[a.length][b.length];
-};
-
-const mapColumns = (headers: string[], adapter: PlatformAdapter): { indexes: Partial<Record<CanonicalField, number>>; audit: MappingAudit[]; mode: MappingMode } => {
-  const indexes: Partial<Record<CanonicalField, number>> = {};
-  const audit: MappingAudit[] = [];
-  const normalizedAdapterMap = new Map(
-    Object.entries(adapter.columnMap).map(([source, field]) => [normalizeKey(source), field]),
-  );
-
-  headers.forEach((header, index) => {
-    const field = normalizedAdapterMap.get(normalizeKey(header));
-    if (field && indexes[field] === undefined) {
-      indexes[field] = index;
-      audit.push({ canonicalField: field, detectedColumn: header, confidence: 1, mode: "auto" });
-    }
-  });
-
-  for (const [field, hints] of Object.entries(canonicalFieldHints) as [CanonicalField, string[]][]) {
-    if (indexes[field] !== undefined) continue;
-    const candidates = headers.map((header, index) => {
-      const normalizedHeader = normalizeKey(header);
-      const score = Math.max(
-        ...hints.map((hint) => {
-          const normalizedHint = normalizeKey(hint);
-          if (normalizedHeader.includes(normalizedHint) || normalizedHint.includes(normalizedHeader)) return 0.9;
-          const distance = levenshtein(normalizedHeader, normalizedHint);
-          return Math.max(0, 1 - distance / Math.max(normalizedHeader.length, normalizedHint.length, 1));
-        }),
-      );
-      return { header, index, score };
-    }).sort((a, b) => b.score - a.score);
-    const best = candidates[0];
-    if (best && best.score >= 0.55) {
-      indexes[field] = best.index;
-      audit.push({ canonicalField: field, detectedColumn: best.header, confidence: best.score, mode: best.score >= 0.75 ? "auto" : "manual" });
-    }
-  }
-
-  const requiresManual = requiredFields.some((field) => {
-    const entry = audit.find((item) => item.canonicalField === field);
-    return !entry || entry.confidence < 0.75;
-  });
-  console.info("Column mapping results", audit);
-  return { indexes, audit, mode: requiresManual ? "manual" : "auto" };
-};
-
-const toTitleCase = (str: string) =>
-  str.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
-
-const isBlankRow = (row: unknown[]) => row.every((cell) => clean(cell) === "");
-
-const buildWeekLabel = (sheetName: string, orderDate: Date) => {
-  const trimmed = sheetName.trim();
-  if (trimmed) return trimmed;
-  return orderDate.toISOString().slice(0, 10);
-};
-
-const findCustomerAlias = (rawName: string, customers: CustomerProfile[]) => {
-  const normalized = normalizeKey(rawName);
-  return customers.find((customer) =>
-    [customer.displayName, ...customer.aliases].some((name) => normalizeKey(name) === normalized),
-  )?.displayName ?? rawName;
-};
-
-const findMenuMatch = (rawName: string, menuItems: MenuItem[]) => {
-  const normalized = normalizeKey(rawName);
-  return menuItems.find((item) =>
-    [item.name, ...item.aliases].some((name) => normalizeKey(name) === normalized),
-  );
 };
 
 const rebuildOrders = (lineItems: LineItem[]) =>
@@ -212,7 +93,11 @@ const rebuildOrders = (lineItems: LineItem[]) =>
     };
   });
 
-const autoTierCustomers = (customers: CustomerProfile[], orders: ReturnType<typeof rebuildOrders>, settings: OperatorSettings) => {
+const autoTierCustomers = (
+  customers: CustomerProfile[],
+  orders: ReturnType<typeof rebuildOrders>,
+  settings: OperatorSettings,
+) => {
   const spendByCustomer = new Map<string, { spend: number; count: number; discount: number; first: string; last: string }>();
   orders.forEach((order) => {
     const current = spendByCustomer.get(order.customerName) ?? {
@@ -259,119 +144,70 @@ export const parseWorkbookFile = async (file: File, logs: IngestionEvent[]) => {
   });
 };
 
+export type IngestFileOutcome =
+  | {
+      status: "complete";
+      result: IngestionResult;
+      confidence: number;
+      adapterUsed: string;
+    }
+  | {
+      status: "needs_mapping";
+      detectedColumns: string[];
+      bestGuess: Record<AppField, string>;
+      fingerprint: string;
+      rawSheets: RawSheet[];
+    }
+  | { status: "error"; message: string };
+
 export async function ingestFile(params: {
   file: File;
   existingLineItems: LineItem[];
   existingCustomers: CustomerProfile[];
   menuItems: MenuItem[];
   settings: OperatorSettings;
-}): Promise<IngestionResult> {
+  mappingRegistry: MappingRegistry;
+  manualColumnMapping?: Partial<Record<AppField, string>> | null;
+}): Promise<IngestFileOutcome> {
   const logs: IngestionEvent[] = [];
   const importTimestamp = new Date().toISOString();
   const rawSheets = await parseWorkbookFile(params.file, logs);
-  const operationalSheets = rawSheets.filter((sheet) => sheet.type === "operational_data");
-  const allHeaders = operationalSheets.flatMap((sheet) => sheet.headers);
-  const { adapter, confidence } = detectPlatformAdapter(allHeaders);
-  log(logs, "info", `Adapter selected: ${adapter.id} (${confidence.toFixed(2)})`);
 
-  const staging: LineItem[] = [];
-  const mappingAudit: MappingAudit[] = [];
-  let rowsSkipped = 0;
-  let rowsFlagged = 0;
-  let mappingMode: MappingMode = "auto";
+  const adapterResult = runAdapterRegistry(
+    params.file.name,
+    rawSheets,
+    params.mappingRegistry,
+    {
+      existingCustomers: params.existingCustomers,
+      menuItems: params.menuItems,
+      settings: params.settings,
+      importTimestamp,
+      logs,
+    },
+    params.manualColumnMapping ?? null,
+  );
 
-  for (const sheet of operationalSheets) {
-    const { indexes, audit, mode } = mapColumns(sheet.headers, adapter);
-    mappingAudit.push(...audit);
-    if (mode === "manual") mappingMode = "manual";
-    log(logs, mode === "manual" ? "warn" : "info", `Mapping mode for ${sheet.name}: ${mode}`);
-    let currentCustomer = "";
-    let currentDate = "";
-    let orderSequence = 0;
-
-    for (let rowIndex = sheet.headerRowIndex + 1; rowIndex < sheet.rows.length; rowIndex += 1) {
-      const row = sheet.rows[rowIndex];
-      if (isBlankRow(row)) continue;
-      const get = (field: CanonicalField) => {
-        const index = indexes[field];
-        return index === undefined ? "" : row[index];
-      };
-      const rawCustomer = clean(get("customerName"));
-      const rawDate = get("orderDate");
-      const rawItem = clean(get("menuItem"));
-      const quantity = toNumber(get("quantitySold"));
-      const provisionalCustomer = rawCustomer || currentCustomer;
-
-      if (/weekly totals/i.test(provisionalCustomer)) {
-        rowsSkipped += 1;
-        log(logs, "info", `Skipped row ${rowIndex + 1}: weekly totals`);
-        continue;
-      }
-      if (!clean(rawDate) && !rawCustomer && !rawItem && quantity === 0) {
-        rowsSkipped += 1;
-        log(logs, "info", `Skipped row ${rowIndex + 1}: annotation or blank operational fields`);
-        continue;
-      }
-
-      const parsedDate = parseDate(rawDate, adapter, logs);
-      if (rawCustomer && parsedDate) {
-        currentCustomer = toTitleCase(rawCustomer);
-        const nextDate = parsedDate.toISOString().slice(0, 10);
-        if (nextDate !== currentDate || rawCustomer !== provisionalCustomer) orderSequence += 1;
-        currentDate = nextDate;
-      } else if (!rawCustomer && currentCustomer) {
-        log(logs, "info", `Forward-filled customer "${currentCustomer}" into row ${rowIndex + 1}`);
-      }
-
-      const customerName = findCustomerAlias(currentCustomer || toTitleCase(rawCustomer), params.existingCustomers);
-      const orderDate = parsedDate ?? (currentDate ? new Date(currentDate) : null);
-      const grossRevenue = toNumber(get("grossRevenue"));
-      const netNetPayoutVal = toNumber(get("netNetPayout"));
-
-      // Platform fee adjustment rows: zero revenue, nonzero payout, blank item — not real transactions
-      if (grossRevenue === 0 && netNetPayoutVal !== 0 && !rawItem) {
-        rowsSkipped += 1;
-        log(logs, "info", `Skipped row ${rowIndex + 1}: fee_adjustment_row (grossRevenue=0, netPayout=${netNetPayoutVal}, blank item)`);
-        continue;
-      }
-
-      const menuMatch = findMenuMatch(rawItem, params.menuItems);
-      const dataQuality = !customerName ? "missing_customer" : grossRevenue === 0 ? "missing_revenue" : "ok";
-      if (dataQuality !== "ok") rowsFlagged += 1;
-      if (menuMatch && quantity > 0) {
-        const chargedPrice = grossRevenue / quantity;
-        const variance = menuMatch.price ? Math.abs(chargedPrice - menuMatch.price) / menuMatch.price : 0;
-        if (variance > params.settings.priceVarianceAlertThreshold / 100) rowsFlagged += 1;
-      }
-      if (!orderDate || !rawItem) {
-        rowsSkipped += 1;
-        log(logs, "warn", `Skipped row ${rowIndex + 1}: missing required transaction fields`);
-        continue;
-      }
-
-      const orderId = `${adapter.id}-${orderDate.toISOString().slice(0, 10)}-${normalizeKey(customerName)}-${orderSequence}`;
-      staging.push({
-        id: makeId(),
-        orderId,
-        sourceSheet: sheet.name,
-        sourcePlatform: adapter.id,
-        importTimestamp,
-        orderDate: orderDate.toISOString(),
-        weekLabel: buildWeekLabel(sheet.name, orderDate),
-        customerName,
-        menuItem: rawItem.toUpperCase(),
-        quantitySold: quantity,
-        grossRevenue,
-        doorDashFees: toNumber(get("doorDashFees")),
-        marketingFees: toNumber(get("marketingFees")),
-        customerDiscounts: toNumber(get("customerDiscounts")),
-        netPayoutPerItem: toNumber(get("netPayoutPerItem")),
-        marketingCredits: toNumber(get("marketingCredits")),
-        netNetPayout: toNumber(get("netNetPayout")),
-        dataQuality,
-      });
-    }
+  if (adapterResult.status === "error") {
+    return { status: "error", message: adapterResult.message };
   }
+  if (adapterResult.status === "needs_mapping") {
+    return {
+      status: "needs_mapping",
+      detectedColumns: adapterResult.detectedColumns,
+      bestGuess: adapterResult.bestGuess,
+      fingerprint: adapterResult.fingerprint,
+      rawSheets,
+    };
+  }
+
+  const { data, confidence, adapterUsed } = adapterResult;
+  log(logs, "info", `Adapter pipeline: ${adapterUsed} (confidence ${confidence})`);
+
+  const staging = data.lineItems;
+  const mappingAudit = data.mappingAudit;
+  const rowsSkipped = data.rowsSkipped;
+  const rowsFlagged = data.rowsFlagged;
+  const mappingMode = data.mappingMode;
 
   const existingKeys = new Set(
     params.existingLineItems.map((item) =>
@@ -416,26 +252,35 @@ export async function ingestFile(params: {
   const newMenuItemNames = Array.from(new Set(fresh.map((item) => item.menuItem))).filter((name) => !menuNames.has(normalizeKey(name)));
   newMenuItemNames.forEach((name) => log(logs, "info", `Auto-discovered menu item candidate: ${name}`));
 
+  const operationalSheets = rawSheets.filter((sheet) => sheet.type === "operational_data");
+
   return {
-    lineItems,
-    orders,
-    customers,
-    mappingAudit,
-    logs,
-    newMenuItemNames,
-    importRecord: {
-      id: makeId(),
-      filename: params.file.name,
-      importTimestamp,
-      platform: adapter.id,
-      sheetsDetected: rawSheets.length,
-      sheetsProcessed: operationalSheets.length,
-      rowsImported: fresh.length,
-      rowsSkipped,
-      rowsFlagged,
-      duplicatesResolved,
-      mappingMode,
-      columnMappings: Object.fromEntries(mappingAudit.map((entry) => [entry.canonicalField, entry.detectedColumn])),
+    status: "complete",
+    confidence,
+    adapterUsed,
+    result: {
+      lineItems,
+      orders,
+      customers,
+      mappingAudit,
+      logs,
+      newMenuItemNames,
+      importRecord: {
+        id: makeId(),
+        filename: params.file.name,
+        importTimestamp,
+        platform: data.platform,
+        sheetsDetected: rawSheets.length,
+        sheetsProcessed: operationalSheets.length,
+        rowsImported: fresh.length,
+        rowsSkipped,
+        rowsFlagged,
+        duplicatesResolved,
+        mappingMode,
+        columnMappings: Object.fromEntries(mappingAudit.map((entry) => [entry.canonicalField, entry.detectedColumn])),
+        adapterConfidence: confidence,
+        adapterUsed,
+      },
     },
   };
 }

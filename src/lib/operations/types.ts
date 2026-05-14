@@ -126,6 +126,9 @@ export interface ImportRecord {
   duplicatesResolved: number;
   mappingMode: MappingMode;
   columnMappings: Record<string, string>;
+  /** Present when import used the adapter registry pipeline */
+  adapterConfidence?: number;
+  adapterUsed?: string;
 }
 
 export interface OperatorSettings {

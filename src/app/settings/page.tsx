@@ -5,5 +5,9 @@ export const metadata = {
 };
 
 export default function SettingsPage() {
-  return <OperationsDashboard initialTab="settings" />;
+  return (
+    <div className="min-w-0">
+      <OperationsDashboard initialTab="settings" dedicatedSettingsRoute />
+    </div>
+  );
 }

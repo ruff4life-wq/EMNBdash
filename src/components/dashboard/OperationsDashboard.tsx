@@ -1,18 +1,7 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   applyFilters,
   computeExecutiveOverview,
@@ -24,8 +13,19 @@ import {
   revenueByDay,
   simulateProfit,
 } from "@/lib/operations/analytics";
+import { DropZone, validateWorkbookFileForImport } from "@/components/import/DropZone";
+import { getMappingRegistry } from "@/components/import/mappingRegistryClient";
+import { MappingModal, type MappingModalPayload } from "@/components/import/MappingModal";
+import { SavedColumnMappingsCard } from "@/components/import/SavedColumnMappingsCard";
+import type { AppField } from "@/lib/operations/adapters";
 import { ingestFile } from "@/lib/operations/ingestion";
 import { useOperationsStore } from "@/store";
+import FeeAlerts from "@/components/dashboard/FeeAlerts";
+import MenuIntelligence from "@/components/dashboard/MenuIntelligence";
+import RepeatCustomers from "@/components/dashboard/RepeatCustomers";
+import TopCustomers from "@/components/dashboard/TopCustomers";
+import TopItem from "@/components/dashboard/TopItem";
+import VIPLeaderboard from "@/components/dashboard/VIPLeaderboard";
 import type { CustomerTier, MenuItem } from "@/lib/operations/types";
 
 const tabs = ["dashboard", "menu", "customers", "settings", "dev"] as const;
@@ -74,46 +74,44 @@ function ImportSummary() {
   );
 }
 
-function FileImporter() {
-  const [isImporting, setIsImporting] = useState(false);
-  const [error, setError] = useState("");
-  const state = useOperationsStore();
+type ToastItem = { id: string; tone: "success" | "warning"; message: string };
 
-  const importFiles = async (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) return;
-    setIsImporting(true);
-    setError("");
-    try {
-      const result = await ingestFile({
-        file,
-        existingLineItems: state.lineItems,
-        existingCustomers: state.customers,
-        menuItems: state.menuItems,
-        settings: state.settings,
-      });
-      state.applyIngestionResult(result);
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Import failed";
-      console.error(message);
-      setError(message);
-    } finally {
-      setIsImporting(false);
-    }
-  };
+function ToastStack({ items, onDismiss }: { items: ToastItem[]; onDismiss: (id: string) => void }) {
+  if (!items.length) return null;
+  return (
+    <div className="ops-toast-stack" aria-live="polite">
+      {items.map((item) => (
+        <div key={item.id} className={`ops-toast ${item.tone === "success" ? "ops-toast-success" : "ops-toast-warn"}`}>
+          {item.message}
+          <button type="button" className="ops-secondary" style={{ marginLeft: 10 }} onClick={() => onDismiss(item.id)}>
+            Dismiss
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
+function FileImporter({
+  isImporting,
+  importError,
+  onFileAccepted,
+  onValidationError,
+}: {
+  isImporting: boolean;
+  importError: string;
+  onFileAccepted: (file: File) => void;
+  onValidationError: (message: string) => void;
+}) {
   return (
     <div className="ops-import">
-      <label className="ops-file-drop">
-        <input
-          type="file"
-          accept=".csv,.xlsx,.xlsm,.xls"
-          onChange={(event) => importFiles(event.target.files)}
-          disabled={isImporting}
-        />
-        <span>{isImporting ? "Importing..." : "Drop or choose export"}</span>
-      </label>
-      {error ? <p className="ops-error">{error}</p> : null}
+      <DropZone
+        disabled={isImporting}
+        onFileAccepted={onFileAccepted}
+        onValidationError={onValidationError}
+        label={isImporting ? "Importing..." : "Drop or choose export"}
+      />
+      {importError ? <p className="ops-error">{importError}</p> : null}
     </div>
   );
 }
@@ -189,7 +187,8 @@ function DashboardView() {
 
   return (
     <>
-      <FilterBar />
+      <FeeAlerts lineItems={filteredLineItems} currencySymbol={settings.currencySymbol} />
+
       <section className="ops-kpi-grid">
         {[
           ["Total Gross Revenue", money(overview.totalGrossRevenue)],
@@ -208,6 +207,10 @@ function DashboardView() {
         ))}
       </section>
 
+      <TopCustomers orders={filteredOrders} currencySymbol={settings.currencySymbol} />
+      <RepeatCustomers orders={filteredOrders} currencySymbol={settings.currencySymbol} />
+      <TopItem lineItems={filteredLineItems} currencySymbol={settings.currencySymbol} />
+
       <section className="ops-grid">
         <article className="ops-panel">
           <h2>Revenue over time</h2>
@@ -221,9 +224,23 @@ function DashboardView() {
                 <Line type="monotone" dataKey="revenue" stroke="#1D8A6E" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
-          ) : <p className="ops-muted">No filtered revenue rows.</p>}
+          ) : (
+            <p className="ops-muted">No filtered revenue rows.</p>
+          )}
         </article>
+      </section>
 
+      <section className="ops-grid">
+        <VIPLeaderboard leaders={leaders} currencySymbol={settings.currencySymbol} />
+        <MenuIntelligence
+          menu={menu}
+          menuChartKey={menuChartKey}
+          setMenuChartKey={setMenuChartKey}
+          currencySymbol={settings.currencySymbol}
+        />
+      </section>
+
+      <section className="ops-grid">
         <article className="ops-panel">
           <h2>Profit simulator</h2>
           <label className="ops-field">
@@ -243,89 +260,7 @@ function DashboardView() {
         </article>
       </section>
 
-      <section className="ops-grid">
-        <article className="ops-panel">
-          <h2>VIP customer leaderboard</h2>
-          <div className="ops-table-wrap">
-            <table className="ops-table">
-              <thead><tr><th>Name</th><th>Tier</th><th>Spend</th><th>Orders</th><th>AOV</th><th>Fee</th><th>Net</th></tr></thead>
-              <tbody>
-                {leaders.map((leader) => (
-                  <tr key={leader.name}>
-                    <td>{leader.name}</td>
-                    <td><span className="ops-badge">{leader.tier}</span></td>
-                    <td>{money(leader.spend)}</td>
-                    <td>{leader.orders}</td>
-                    <td>{money(leader.aov)}</td>
-                    <td>{formatPercent(leader.feePercent)}</td>
-                    <td>{money(leader.net)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </article>
-
-        <article className="ops-panel">
-          <h2>Menu intelligence</h2>
-          <div className="ops-chart-controls">
-            <button type="button" className={menuChartKey === "qty" ? "ops-primary" : "ops-secondary"} onClick={() => setMenuChartKey("qty")}>By Quantity</button>
-            <button type="button" className={menuChartKey === "revenue" ? "ops-primary" : "ops-secondary"} onClick={() => setMenuChartKey("revenue")}>By Revenue</button>
-          </div>
-          {menu.length === 0 ? (
-            <p className="ops-muted">No menu data for selected filters. Try adjusting your date range or item selection.</p>
-          ) : (
-            <>
-              {menu.length === 1 && <p className="ops-muted">Showing 1 item for selected filters.</p>}
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={menu} margin={{ bottom: 60 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="name"
-                    tick={{ fontSize: 11 }}
-                    tickFormatter={(name: string) => name.length > 15 ? `${name.slice(0, 15)}…` : name}
-                    angle={-45}
-                    textAnchor="end"
-                    interval={0}
-                  />
-                  <YAxis />
-                  <Tooltip
-                    formatter={(value, _name, props) => {
-                      const item = props.payload as { name: string; qty: number; revenue: number; feePercent: number };
-                      return [
-                        menuChartKey === "qty"
-                          ? `${Number(value).toLocaleString()} sold`
-                          : money(Number(value)),
-                        item.name,
-                      ];
-                    }}
-                  />
-                  <Bar dataKey={menuChartKey} fill="#C8B400">
-                    {menu.map((entry) => <Cell key={entry.name} fill="#C8B400" />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </>
-          )}
-          <div className="ops-table-wrap">
-            <table className="ops-table">
-              <thead><tr><th>Item</th><th>Qty</th><th>Revenue</th><th>Avg price</th><th>Fee</th><th>Variance</th></tr></thead>
-              <tbody>
-                {menu.map((item) => (
-                  <tr key={item.name}>
-                    <td>{item.name}</td>
-                    <td>{item.qty}</td>
-                    <td>{money(item.revenue)}</td>
-                    <td>{money(item.avgPrice)}</td>
-                    <td>{formatPercent(item.feePercent)}</td>
-                    <td>{item.variance ? "Review" : "OK"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </article>
-      </section>
+      <FilterBar />
     </>
   );
 }
@@ -436,7 +371,7 @@ function CustomerDirectory() {
   );
 }
 
-function SettingsPanel() {
+function SettingsPanel({ hideSavedMappings }: { hideSavedMappings?: boolean }) {
   const { settings, updateSettings, resetSettings, lineItems, orders, menuItems, customers, importLog, filters, importBackup } = useOperationsStore();
   const exportData = () => {
     const blob = new Blob([JSON.stringify({ lineItems, orders, menuItems, customers, importLog, filters, settings }, null, 2)], { type: "application/json" });
@@ -452,7 +387,9 @@ function SettingsPanel() {
     importBackup(JSON.parse(await file.text()));
   };
   return (
-    <section className="ops-panel">
+    <>
+      {!hideSavedMappings ? <SavedColumnMappingsCard /> : null}
+      <section className="ops-panel">
       <h2>Settings</h2>
       <div className="ops-form-grid">
         {[
@@ -477,6 +414,7 @@ function SettingsPanel() {
         <button type="button" className="ops-danger" onClick={resetSettings}>Reset defaults</button>
       </div>
     </section>
+    </>
   );
 }
 
@@ -495,8 +433,135 @@ function DevPanel() {
   );
 }
 
-export default function OperationsDashboard({ initialTab = "dashboard" }: { initialTab?: Tab }) {
+export default function OperationsDashboard({
+  initialTab = "dashboard",
+  dedicatedSettingsRoute = false,
+}: {
+  initialTab?: Tab;
+  dedicatedSettingsRoute?: boolean;
+}) {
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [mappingOpen, setMappingOpen] = useState(false);
+  const [mappingFile, setMappingFile] = useState<File | null>(null);
+  const [mappingPayload, setMappingPayload] = useState<MappingModalPayload | null>(null);
+
+  const pushToast = useCallback((tone: ToastItem["tone"], message: string) => {
+    const id = `${Date.now()}`;
+    setToasts((prev) => [...prev, { id, tone, message }]);
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5200);
+  }, []);
+
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const ingestOutcomeHandler = useCallback(
+    (outcome: Awaited<ReturnType<typeof ingestFile>>, file: File) => {
+      const state = useOperationsStore.getState();
+      if (outcome.status === "needs_mapping") {
+        setMappingFile(file);
+        setMappingPayload({
+          detectedColumns: outcome.detectedColumns,
+          bestGuess: outcome.bestGuess,
+          fingerprint: outcome.fingerprint,
+          rawSheets: outcome.rawSheets,
+        });
+        setMappingOpen(true);
+        return;
+      }
+      if (outcome.status === "error") {
+        setImportError(outcome.message);
+        return;
+      }
+      state.applyIngestionResult(outcome.result);
+      if (outcome.confidence >= 80) {
+        pushToast("success", `Import complete (${outcome.adapterUsed}, confidence ${outcome.confidence}).`);
+      } else if (outcome.confidence >= 50) {
+        pushToast("warning", `Imported with moderate confidence (${outcome.confidence}). Verify totals and fee columns.`);
+      }
+    },
+    [pushToast],
+  );
+
+  const runWorkbookIngest = useCallback(
+    async (file: File, manualMapping: Partial<Record<AppField, string>> | null = null) => {
+      const v = validateWorkbookFileForImport(file);
+      if (v) {
+        setImportError(v);
+        return;
+      }
+      setImportError("");
+      setIsImporting(true);
+      try {
+        const st = useOperationsStore.getState();
+        const outcome = await ingestFile({
+          file,
+          existingLineItems: st.lineItems,
+          existingCustomers: st.customers,
+          menuItems: st.menuItems,
+          settings: st.settings,
+          mappingRegistry: getMappingRegistry(),
+          manualColumnMapping: manualMapping,
+        });
+        ingestOutcomeHandler(outcome, file);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : "Import failed";
+        console.error(message);
+        setImportError(message);
+      } finally {
+        setIsImporting(false);
+      }
+    },
+    [ingestOutcomeHandler],
+  );
+
+  const handleMappingImport = useCallback(
+    async (mapping: Partial<Record<AppField, string>>, saveFingerprint: boolean) => {
+      const file = mappingFile;
+      const payload = mappingPayload;
+      if (!file || !payload) return;
+      setIsImporting(true);
+      setImportError("");
+      try {
+        const st = useOperationsStore.getState();
+        const outcome = await ingestFile({
+          file,
+          existingLineItems: st.lineItems,
+          existingCustomers: st.customers,
+          menuItems: st.menuItems,
+          settings: st.settings,
+          mappingRegistry: getMappingRegistry(),
+          manualColumnMapping: mapping,
+        });
+        if (outcome.status !== "complete") {
+          throw new Error(outcome.status === "error" ? outcome.message : "Could not import with this mapping.");
+        }
+        st.applyIngestionResult(outcome.result);
+        if (saveFingerprint) {
+          getMappingRegistry().save({
+            fingerprint: payload.fingerprint,
+            label: `${file.name} (${payload.fingerprint.slice(0, 8)})`,
+            mapping,
+          });
+        }
+        if (outcome.confidence >= 80) {
+          pushToast("success", `Import complete (${outcome.adapterUsed}, confidence ${outcome.confidence}).`);
+        } else if (outcome.confidence >= 50) {
+          pushToast("warning", `Imported with moderate confidence (${outcome.confidence}). Verify totals and fee columns.`);
+        }
+        setMappingOpen(false);
+        setMappingFile(null);
+        setMappingPayload(null);
+      } finally {
+        setIsImporting(false);
+      }
+    },
+    [mappingFile, mappingPayload, pushToast],
+  );
+
   const hasHydrated = useOperationsStore((state) => state.hasHydrated);
   const orderCount = useOperationsStore((state) => state.orders.length);
   const hasPersistedOpsData = useOperationsStore(
@@ -526,13 +591,30 @@ export default function OperationsDashboard({ initialTab = "dashboard" }: { init
 
   return (
     <main className="ops-shell">
-      <input id={fileInputId} hidden type="file" accept=".csv,.xlsx,.xlsm,.xls" onChange={async (event) => {
-        const state = useOperationsStore.getState();
-        const file = event.target.files?.[0];
-        if (!file) return;
-        const result = await ingestFile({ file, existingLineItems: state.lineItems, existingCustomers: state.customers, menuItems: state.menuItems, settings: state.settings });
-        state.applyIngestionResult(result);
-      }} />
+      <ToastStack items={toasts} onDismiss={dismissToast} />
+      <MappingModal
+        open={mappingOpen && !!mappingFile && !!mappingPayload}
+        file={mappingFile}
+        payload={mappingPayload}
+        onClose={() => {
+          setMappingOpen(false);
+          setMappingFile(null);
+          setMappingPayload(null);
+        }}
+        onImport={handleMappingImport}
+      />
+      <input
+        id={fileInputId}
+        hidden
+        type="file"
+        accept=".csv,.xlsx,.xlsm,.xls"
+        onChange={async (event) => {
+          const file = event.target.files?.[0];
+          if (event.target) event.target.value = "";
+          if (!file) return;
+          await runWorkbookIngest(file, null);
+        }}
+      />
       <header className="ops-header">
         <div>
           <p className="ops-kicker">Operator-first intelligence</p>
@@ -553,9 +635,19 @@ export default function OperationsDashboard({ initialTab = "dashboard" }: { init
               Reset all data
             </button>
           ) : null}
-          <FileImporter />
+          <FileImporter
+            isImporting={isImporting}
+            importError={importError}
+            onFileAccepted={(file) => void runWorkbookIngest(file, null)}
+            onValidationError={setImportError}
+          />
         </div>
       </header>
+      {dedicatedSettingsRoute && activeTab === "settings" ? (
+        <div style={{ padding: "0 0 12px" }}>
+          <SavedColumnMappingsCard />
+        </div>
+      ) : null}
       <nav className="ops-tabs" aria-label="Operations sections">
         {tabs.map((tab) => (
           <button key={tab} type="button" className={activeTab === tab ? "active" : ""} onClick={() => setActiveTab(tab)}>
@@ -569,7 +661,7 @@ export default function OperationsDashboard({ initialTab = "dashboard" }: { init
       {activeTab === "dashboard" ? <DashboardView /> : null}
       {activeTab === "menu" ? <MenuManager /> : null}
       {activeTab === "customers" ? <CustomerDirectory /> : null}
-      {activeTab === "settings" ? <SettingsPanel /> : null}
+      {activeTab === "settings" ? <SettingsPanel hideSavedMappings={dedicatedSettingsRoute} /> : null}
       {activeTab === "dev" ? <DevPanel /> : null}
       <ImportSummary />
     </main>

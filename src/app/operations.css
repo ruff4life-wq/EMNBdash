@@ -112,6 +112,12 @@
   font-weight: 700;
   min-height: 48px;
   padding: 10px 14px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.ops-file-drop.ops-file-drop-active {
+  background: #f0faf7;
+  border-color: #2e9b5a;
 }
 
 .ops-file-drop input,
@@ -291,6 +297,57 @@
   max-width: 560px;
   padding: 22px;
   width: min(100%, 560px);
+}
+
+.ops-modal.ops-modal-wide {
+  max-width: 920px;
+  width: min(100%, 920px);
+}
+
+.ops-toast-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  inset: 12px 12px auto auto;
+  max-width: min(420px, 100vw - 24px);
+  position: fixed;
+  z-index: 1100;
+}
+
+.ops-toast {
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(15, 36, 32, 0.18);
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 12px 14px;
+}
+
+.ops-toast-success {
+  background: #e6f7ed;
+  border: 1px solid #2e9b5a;
+  color: #0f3d24;
+}
+
+.ops-toast-warn {
+  background: #fff8e6;
+  border: 1px solid #c9a227;
+  color: #3d320f;
+}
+
+.ops-mapping-preview {
+  border: 1px solid #e2ece9;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  overflow: auto;
+  width: 100%;
+}
+
+.ops-mapping-preview th,
+.ops-mapping-preview td {
+  border-bottom: 1px solid #eef4f2;
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .ops-modal h2 {
