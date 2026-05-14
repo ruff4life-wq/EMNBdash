@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { runAdapterRegistry } from "./adapters";
 import { excelSerialToDate } from "./extractLineItems";
+import { distributeOrderFeesAcrossLineItems } from "./normalization";
 import type { AppField, MappingRegistry } from "./adapters";
 import type {
   CustomerProfile,
@@ -225,7 +226,7 @@ export async function ingestFile(params: {
     existingKeys.add(key);
     return true;
   });
-  const lineItems = [...params.existingLineItems, ...fresh];
+  const lineItems = distributeOrderFeesAcrossLineItems([...params.existingLineItems, ...fresh]);
   const orders = rebuildOrders(lineItems);
   const customerMap = new Map(params.existingCustomers.map((customer) => [normalizeKey(customer.displayName), customer]));
   orders.forEach((order) => {

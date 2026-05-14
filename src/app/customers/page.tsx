@@ -5,5 +5,9 @@ export const metadata = {
 };
 
 export default function CustomersPage() {
-  return <OperationsDashboard initialTab="customers" />;
+  return (
+    <div className="min-w-0">
+      <OperationsDashboard initialTab="customers" />
+    </div>
+  );
 }

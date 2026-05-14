@@ -373,6 +373,67 @@
   font-weight: 800;
 }
 
+.ops-slideover-root {
+  inset: 0;
+  position: fixed;
+  z-index: 900;
+}
+
+.ops-slideover-backdrop {
+  background: rgba(15, 36, 32, 0.45);
+  border: 0;
+  cursor: pointer;
+  inset: 0;
+  padding: 0;
+  position: absolute;
+}
+
+.ops-slideover-panel {
+  background: #fff;
+  border-left: 1px solid #dbe9e4;
+  bottom: 0;
+  box-shadow: -8px 0 24px rgba(15, 36, 32, 0.12);
+  display: flex;
+  flex-direction: column;
+  max-width: min(720px, 100vw);
+  overflow: hidden;
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 100%;
+}
+
+.ops-slideover-panel-header {
+  align-items: flex-start;
+  border-bottom: 1px solid #e2ece9;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 16px 18px;
+}
+
+.ops-slideover-panel-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 18px 24px;
+}
+
+.ops-table-row-clickable {
+  cursor: pointer;
+}
+
+.ops-table-row-clickable:hover {
+  background: #f6faf8;
+}
+
+.ops-order-lines {
+  background: #f9fcfb;
+  border: 1px solid #e2ece9;
+  border-radius: 8px;
+  margin: 8px 0 0;
+  padding: 10px;
+}
+
 @media (max-width: 760px) {
   .ops-shell {
     padding: 16px;

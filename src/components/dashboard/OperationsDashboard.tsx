@@ -6,7 +6,6 @@ import {
   applyFilters,
   computeExecutiveOverview,
   customerLeaderboard,
-  deriveFilterOptions,
   formatMoney,
   formatPercent,
   menuIntelligence,
@@ -20,13 +19,15 @@ import { SavedColumnMappingsCard } from "@/components/import/SavedColumnMappings
 import type { AppField } from "@/lib/operations/adapters";
 import { ingestFile } from "@/lib/operations/ingestion";
 import { useOperationsStore } from "@/store";
+import CustomerDirectory from "@/components/customers/CustomerDirectory";
 import FeeAlerts from "@/components/dashboard/FeeAlerts";
+import FilterBar from "@/components/dashboard/FilterBar";
 import MenuIntelligence from "@/components/dashboard/MenuIntelligence";
 import RepeatCustomers from "@/components/dashboard/RepeatCustomers";
 import TopCustomers from "@/components/dashboard/TopCustomers";
 import TopItem from "@/components/dashboard/TopItem";
 import VIPLeaderboard from "@/components/dashboard/VIPLeaderboard";
-import type { CustomerTier, MenuItem } from "@/lib/operations/types";
+import type { MenuItem } from "@/lib/operations/types";
 
 const tabs = ["dashboard", "menu", "customers", "settings", "dev"] as const;
 type Tab = (typeof tabs)[number];
@@ -113,55 +114,6 @@ function FileImporter({
       />
       {importError ? <p className="ops-error">{importError}</p> : null}
     </div>
-  );
-}
-
-function MultiSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string[];
-  options: string[];
-  onChange: (value: string[]) => void;
-}) {
-  return (
-    <label className="ops-field">
-      <span>{label}</span>
-      <select
-        multiple
-        value={value}
-        onChange={(event) => onChange(Array.from(event.target.selectedOptions).map((option) => option.value))}
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function FilterBar() {
-  const { orders, lineItems, customers, filters, setFilters, resetFilters } = useOperationsStore();
-  const options = useMemo(() => deriveFilterOptions(orders, lineItems, customers), [orders, lineItems, customers]);
-  return (
-    <section className="ops-panel ops-filters">
-      <label className="ops-field">
-        <span>Start</span>
-        <input type="date" min={options.dateBounds.min.slice(0, 10)} max={options.dateBounds.max.slice(0, 10)} value={filters.startDate} onChange={(event) => setFilters({ startDate: event.target.value })} />
-      </label>
-      <label className="ops-field">
-        <span>End</span>
-        <input type="date" min={options.dateBounds.min.slice(0, 10)} max={options.dateBounds.max.slice(0, 10)} value={filters.endDate} onChange={(event) => setFilters({ endDate: event.target.value })} />
-      </label>
-      <MultiSelect label="Weeks" value={filters.weekLabels} options={options.weekLabels} onChange={(weekLabels) => setFilters({ weekLabels })} />
-      <MultiSelect label="Platforms" value={filters.platforms} options={options.platforms} onChange={(platforms) => setFilters({ platforms })} />
-      <MultiSelect label="Customers" value={filters.customers} options={options.customers} onChange={(customers) => setFilters({ customers })} />
-      <MultiSelect label="Items" value={filters.menuItems} options={options.menuItems} onChange={(menuItems) => setFilters({ menuItems })} />
-      <button type="button" className="ops-secondary" onClick={resetFilters}>Reset filters</button>
-    </section>
   );
 }
 
@@ -326,44 +278,6 @@ function MenuManager() {
                 </td>
               </tr>
             ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function CustomerDirectory() {
-  const { customers, orders, updateCustomer } = useOperationsStore();
-  const metrics = useMemo(() => customerLeaderboard(orders, customers), [orders, customers]);
-  const metricsMap = new Map(metrics.map((item) => [item.name, item]));
-  const [editingId, setEditingId] = useState("");
-  return (
-    <section className="ops-panel">
-      <h2>Customer directory</h2>
-      <div className="ops-table-wrap">
-        <table className="ops-table">
-          <thead><tr><th>Name</th><th>Tier</th><th>Orders</th><th>Spend</th><th>Last order</th><th>Notes</th><th>Actions</th></tr></thead>
-          <tbody>
-            {customers.map((customer) => {
-              const metric = metricsMap.get(customer.displayName);
-              const isEditing = editingId === customer.id;
-              return (
-                <tr key={customer.id}>
-                  <td>{isEditing ? <input value={customer.displayName} onChange={(event) => updateCustomer(customer.id, { displayName: event.target.value })} /> : customer.displayName}</td>
-                  <td>
-                    <select value={customer.tier} onChange={(event) => updateCustomer(customer.id, { tier: event.target.value as CustomerTier, tierOverride: true })}>
-                      {["vip", "loyal", "promo_heavy", "new", "at_risk", "unassigned"].map((tier) => <option key={tier}>{tier}</option>)}
-                    </select>
-                  </td>
-                  <td>{metric?.orders ?? 0}</td>
-                  <td>{metric ? formatMoney(metric.spend, useOperationsStore.getState().settings.currencySymbol) : ""}</td>
-                  <td>{customer.lastSeen.slice(0, 10)}</td>
-                  <td>{isEditing ? <input value={customer.notes} onChange={(event) => updateCustomer(customer.id, { notes: event.target.value })} /> : customer.notes}</td>
-                  <td><button type="button" className="ops-secondary" onClick={() => setEditingId(isEditing ? "" : customer.id)}>{isEditing ? "Done" : "Edit"}</button></td>
-                </tr>
-              );
-            })}
           </tbody>
         </table>
       </div>
