@@ -187,8 +187,6 @@ function DashboardView() {
 
   return (
     <>
-      <FeeAlerts lineItems={filteredLineItems} currencySymbol={settings.currencySymbol} />
-
       <section className="ops-kpi-grid">
         {[
           ["Total Gross Revenue", money(overview.totalGrossRevenue)],
@@ -259,6 +257,8 @@ function DashboardView() {
           </label>
         </article>
       </section>
+
+      <FeeAlerts lineItems={filteredLineItems} orders={filteredOrders} currencySymbol={settings.currencySymbol} />
 
       <FilterBar />
     </>

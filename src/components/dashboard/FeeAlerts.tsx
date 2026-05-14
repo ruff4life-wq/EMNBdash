@@ -2,24 +2,37 @@
 
 import { useMemo } from "react";
 import { formatMoney, formatPercent } from "@/lib/operations/analytics";
-import type { LineItem } from "@/lib/operations/types";
+import type { LineItem, Order } from "@/lib/operations/types";
 
-function lineFeeUsd(item: LineItem) {
-  return item.doorDashFees + item.marketingFees;
+/** Marketing fee as % of full order gross — not line-item gross (avoids inflated %). */
+function marketingFeePct(item: LineItem, orderById: Map<string, Order>) {
+  const order = orderById.get(item.orderId);
+  const revenuePerOrder = order?.totalGrossRevenue ?? 0;
+  if (revenuePerOrder <= 0) return 0;
+  return (item.marketingFees / revenuePerOrder) * 100;
 }
 
-function lineFeePercent(item: LineItem) {
-  if (item.grossRevenue <= 0) return 0;
-  return (lineFeeUsd(item) / item.grossRevenue) * 100;
-}
+export default function FeeAlerts({
+  lineItems,
+  orders,
+  currencySymbol,
+}: {
+  lineItems: LineItem[];
+  orders: Order[];
+  currencySymbol: string;
+}) {
+  const orderById = useMemo(() => new Map(orders.map((o) => [o.orderId, o])), [orders]);
 
-export default function FeeAlerts({ lineItems, currencySymbol }: { lineItems: LineItem[]; currencySymbol: string }) {
   const flagged = useMemo(() => {
     return lineItems
-      .map((item) => ({ item, feePct: lineFeePercent(item), feeUsd: lineFeeUsd(item) }))
+      .map((item) => ({
+        item,
+        feePct: marketingFeePct(item, orderById),
+        feeUsd: item.marketingFees,
+      }))
       .filter(({ feePct }) => feePct > 25)
       .sort((a, b) => b.feePct - a.feePct);
-  }, [lineItems]);
+  }, [lineItems, orderById]);
 
   if (flagged.length === 0) {
     return (
@@ -29,7 +42,7 @@ export default function FeeAlerts({ lineItems, currencySymbol }: { lineItems: Li
       >
         <p className="m-0 text-sm font-semibold">✓ All fees within 25% threshold</p>
         <p className="mt-1 mb-0 text-xs text-green-700">
-          No line items in the current filter where platform + marketing fees exceed 25% of gross revenue.
+          No line items in the current filter where marketing fees exceed 25% of the order&apos;s total gross revenue.
         </p>
       </section>
     );
@@ -44,7 +57,7 @@ export default function FeeAlerts({ lineItems, currencySymbol }: { lineItems: Li
         ⚠️ Marketing Fee Alerts — Fees Exceeding 25%
       </h2>
       <p className="mt-1 mb-3 text-sm text-red-700">
-        Items where platform fees consumed more than 25% of gross revenue ({flagged.length}{" "}
+        Items where marketing fees exceed 25% of that order&apos;s total gross revenue ({flagged.length}{" "}
         {flagged.length === 1 ? "line" : "lines"}).
       </p>
       <div className="overflow-x-auto rounded-md border border-red-200 bg-white">
@@ -54,8 +67,8 @@ export default function FeeAlerts({ lineItems, currencySymbol }: { lineItems: Li
               <th className="px-3 py-2 font-bold">Customer</th>
               <th className="px-3 py-2 font-bold">Item</th>
               <th className="px-3 py-2 font-bold">Gross revenue</th>
-              <th className="px-3 py-2 font-bold">Fee $</th>
-              <th className="px-3 py-2 font-bold">Fee %</th>
+              <th className="px-3 py-2 font-bold">Marketing fee $</th>
+              <th className="px-3 py-2 font-bold">Marketing fee %</th>
             </tr>
           </thead>
           <tbody>
